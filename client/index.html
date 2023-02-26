@@ -1,0 +1,106 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Hazama</title>
+</head>
+<body>
+<div id="app"></div>
+<script src="elm.js"></script>
+<script>
+    const app = Elm.Main.init({
+        node: document.getElementById("app")
+    });
+
+    const socket = new WebSocket("ws://localhost:3000/ws");
+
+    const send = (tag, command) => socket.send(JSON.stringify({tag, color: null, command}));
+    const sendWithColor = (tag, color, command) => socket.send(JSON.stringify({tag, color, command}));
+
+    app.ports.sendMessage.subscribe((message) => {
+        if (message.command === "start") {
+            send("boardsize", `boardsize ${message.boardSize}`);
+            send("level", `level ${message.level}`);
+            send("komi", "komi 6.5");
+
+            if (message.ownColor === "white") {
+                send("opponent_play", "genmove_black");
+                sendWithColor("list_stones", "black", "list_stones black");
+                sendWithColor("list_stones", "white", "list_stones white");
+            }
+        } else if (message.command === "play") {
+            const opponentColor = message.ownColor === "black" ? "white" : "black";
+            sendWithColor("play", message.ownColor, `play ${message.ownColor} ${message.vertex}`);
+            sendWithColor("list_stones", message.ownColor, `list_stones ${message.ownColor}`);
+            sendWithColor("list_stones", opponentColor, `list_stones ${opponentColor}`);
+            sendWithColor("captured_stones", message.ownColor, `captures ${message.ownColor}`);
+        } else if (message.command === "end") {
+            send("end", "final_score");
+        }
+    });
+
+    socket.addEventListener("message", (event) => {
+        const {tag, color, body} = JSON.parse(event.data);
+
+        switch (tag) {
+            case "play": {
+                const [result] = body.split(" ");
+                if (result === "=") {
+                    setTimeout(() => {
+                        const opponentColor = color === "black" ? "white" : "black";
+                        send("opponent_play", `genmove_${opponentColor}`);
+                        sendWithColor("list_stones", opponentColor, `list_stones ${opponentColor}`);
+                        sendWithColor("list_stones", color, `list_stones ${color}`);
+                        sendWithColor("captured_stones", opponentColor, `captures ${opponentColor}`);
+                    }, 300);
+                }
+                break;
+            }
+            case "opponent_play":
+                app.ports.messageReceiver.send({
+                    command: body === "= PASS" ? "pass" : "move"
+                });
+                break;
+            case "list_stones": {
+                const vertices = body.split(" ").slice(1);
+                if (color === "black") {
+                    app.ports.messageReceiver.send({
+                        command: "updateBlackStones",
+                        vertices,
+                    });
+                } else {
+                    app.ports.messageReceiver.send({
+                        command: "updateWhiteStones",
+                        vertices,
+                    });
+                }
+                break;
+            }
+            case "captured_stones": {
+                const [_, numberOfCapturedStones] = body.split(" ");
+                if (color === "black") {
+                    app.ports.messageReceiver.send({
+                        command: "updateCapturedBlackStones",
+                        number: parseInt(numberOfCapturedStones)
+                    });
+                } else {
+                    app.ports.messageReceiver.send({
+                        command: "updateCapturedWhiteStones",
+                        number: parseInt(numberOfCapturedStones)
+                    });
+                }
+                break;
+            }
+            case "end": {
+                const [_, score] = body.split(" ");
+                app.ports.messageReceiver.send({
+                    command: "end",
+                    score
+                });
+                break;
+            }
+        }
+    });
+</script>
+</body>
+</html>
